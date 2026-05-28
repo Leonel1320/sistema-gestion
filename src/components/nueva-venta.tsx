@@ -3,6 +3,9 @@ import {
   Search, ShoppingCart, Trash2, User, Plus, Minus, Box, CheckCircle2, Percent, AlertTriangle, Printer, FileCheck2
 } from 'lucide-react';
 
+// Importamos el archivo de configuración por defecto
+import empresaDefault from '../data/datos'; 
+
 export default function NuevaVenta() {
   const [productosInventario, setProductosInventario] = useState([]);
   const [clientesDirectorio, setClientesDirectorio] = useState([]);
@@ -14,15 +17,25 @@ export default function NuevaVenta() {
   const [descuentoGlobalPct, setDescuentoGlobalPct] = useState(0);
   const [ventaExitosa, setVentaExitosa] = useState(false);
   const [idCotizacionActual, setIdCotizacionActual] = useState('');
+  
+  // Estado para los datos de la empresa (arranca con el default por seguridad)
+  const [datosEmpresa, setDatosEmpresa] = useState({
+    nombre: empresaDefault.nombre,
+    telefono: empresaDefault.telefono,
+    direccion: empresaDefault.direccion,
+    cuit: empresaDefault.cuit
+  });
 
-  // Carga inicial desde PostgreSQL
+  // Carga inicial desde PostgreSQL (Productos, Clientes y Empresa)
   useEffect(() => {
     const cargarDatos = async () => {
       try {
-        const [resProd, resCli] = await Promise.all([
+        const [resProd, resCli, resEmp] = await Promise.all([
           fetch('http://localhost:5000/api/productos'),
-          fetch('http://localhost:5000/api/clientes')
+          fetch('http://localhost:5000/api/clientes'),
+          fetch('http://localhost:5000/api/empresa') // Traemos los datos modificables de la otra pestaña
         ]);
+        
         const dataProd = await resProd.json();
         const dataCli = await resCli.json();
         
@@ -42,6 +55,20 @@ export default function NuevaVenta() {
           setClienteSeleccionado(dataCli[0].id);
           setBusquedaCliente(dataCli[0].nombre);
         }
+
+        // Si el endpoint de la empresa responde bien y tiene datos, los cargamos
+        if (resEmp.ok) {
+          const dataEmp = await resEmp.json();
+          if (dataEmp) {
+            setDatosEmpresa({
+              // Mapeamos los campos según las columnas de tu tabla 'configuracion_empresa'
+              nombre: dataEmp.razon_social || empresaDefault.nombre,
+              telefono: dataEmp.telefono || empresaDefault.telefono,
+              direccion: dataEmp.direccion || empresaDefault.direccion,
+              cuit: dataEmp.cuit || empresaDefault.cuit
+            });
+          }
+        }
       } catch (err) { 
         console.error("Error al cargar datos desde PostgreSQL:", err); 
       }
@@ -49,7 +76,7 @@ export default function NuevaVenta() {
     cargarDatos();
   }, []);
 
-  const clienteActivo = clientesDirectorio.find(c => c.id === Number(clienteSeleccionado)) || clientesDirectorio[0] || { nombre: 'Consumidor Final', documento: '', telefono: '' };
+  const clienteActivo = clientesDirectorio.find(c => c.id === Number(clienteSeleccionado)) || clientesDirectorio[0] || { nombre: 'Consumidor Final', documento: '', telefono: '', direccion: '' };
   const clientesFiltrados = clientesDirectorio.filter(c => c.nombre.toLowerCase().includes(busquedaCliente.toLowerCase()));
 
   const agregarAlCarrito = (producto) => {
@@ -128,8 +155,8 @@ export default function NuevaVenta() {
         body: JSON.stringify(nuevaCotizacion)
       });
       if (respuesta.ok) setVentaExitosa(true);
-    } catch (err) {
-      console.error("Error en el POST:", err);
+    } catch (err) { 
+      console.error("Error en el POST:", err); 
     }
   };
 
@@ -352,17 +379,23 @@ export default function NuevaVenta() {
         )}
       </div>
 
-      {/* 2. COMPROBANTE OFICIAL ADAPTADO PARA IMPRESIÓN (MEDIOS FÍSICOS) */}
+      {/* 2. COMPROBANTE OFICIAL DINÁMICO PARA IMPRESIÓN / PDF */}
       <div className="hidden print:block bg-white text-black p-8 font-sans w-[210mm] min-h-[297mm] mx-auto">
         <div className="flex justify-between items-start border-b-2 border-gray-800 pb-6 mb-8">
           <div className="w-1/2">
-            <h1 className="text-4xl font-extrabold tracking-tighter text-gray-900 leading-none">CORRALÓN</h1>
-            <h1 className="text-4xl font-light tracking-widest text-gray-900 mb-4 leading-none">NINA</h1>
+            {/* Renderizado dinámico del nombre de tu corralón basado en el estado */}
+            <h1 className="text-4xl font-extrabold tracking-tighter text-gray-900 leading-none uppercase">
+              {datosEmpresa.nombre.split(' ')[0]}
+            </h1>
+            <h1 className="text-4xl font-light tracking-widest text-gray-900 mb-4 leading-none uppercase">
+              {datosEmpresa.nombre.split(' ').slice(1).join(' ') || ''}
+            </h1>
             <p className="text-[11px] font-bold mt-2 text-emerald-700 uppercase tracking-wider">Venta de Materiales de Construcción</p>
-            <p className="text-[11px] text-gray-700 mt-2">Ruta 9, Acceso Sur</p>
-            <p className="text-[11px] text-gray-700">San Salvador de Jujuy, Jujuy, Argentina</p>
-            <p className="text-[11px] text-gray-700">ventas@corralonnina.com.ar</p>
+            <p className="text-[11px] text-gray-700 mt-2">📍 {datosEmpresa.direccion}</p>
+            <p className="text-[11px] text-gray-700">📞 Tel: {datosEmpresa.telefono}</p>
+            <p className="text-[11px] text-gray-700">📄 CUIT: {datosEmpresa.cuit}</p>
           </div>
+          
           <div className="w-1/2 flex flex-col gap-4 items-end">
             <div className="border border-gray-300 rounded p-3 w-64 bg-gray-50">
               <h3 className="bg-gray-200 font-bold text-[10px] uppercase p-1 mb-2 text-center border-b border-gray-300 tracking-wider">PRESUPUESTO COMERCIAL</h3>
@@ -370,12 +403,18 @@ export default function NuevaVenta() {
               <p className="text-xs"><strong>Fecha Emisión:</strong> {new Date().toLocaleDateString('es-AR')}</p>
               <p className="text-xs"><strong>Plazo Validez:</strong> 7 Días Corridos</p>
             </div>
-            <div className="border border-gray-300 rounded p-3 w-64">
-              <h3 className="bg-gray-100 font-bold text-[10px] uppercase p-1 mb-2 text-center border-b border-gray-300">DATOS DEL CLIENTE</h3>
-              <p className="text-xs font-bold">{clienteActivo.nombre}</p>
-              <p className="text-xs">{clienteActivo.documento ? `CUIT/DNI: ${clienteActivo.documento}` : 'Consumidor Final'}</p>
-              <p className="text-xs">{clienteActivo.direccion || 'San Salvador de Jujuy, Jujuy'}</p>
-              {clienteActivo.telefono && <p className="text-xs">Tel: {clienteActivo.telefono}</p>}
+            
+            {/* Recuadro de Datos del Cliente Bien Rotulado */}
+            <div className="border border-gray-300 rounded overflow-hidden w-64">
+              <h3 className="bg-gray-100 font-bold text-[10px] uppercase p-1.5 text-center border-b border-gray-300 tracking-wider text-gray-700">
+                DATOS DEL CLIENTE
+              </h3>
+              <div className="p-3 bg-white">
+                <p className="text-xs font-bold text-gray-950 uppercase">{clienteActivo.nombre}</p>
+                <p className="text-xs text-gray-700 mt-1">{clienteActivo.documento ? `CUIT/DNI: ${clienteActivo.documento}` : 'Consumidor Final'}</p>
+                <p className="text-xs text-gray-700">📍 {clienteActivo.direccion || 'San Salvador de Jujuy, Jujuy'}</p>
+                {clienteActivo.telefono && <p className="text-xs text-gray-700">📞 Tel: {clienteActivo.telefono}</p>}
+              </div>
             </div>
           </div>
         </div>
@@ -442,7 +481,7 @@ export default function NuevaVenta() {
         </div>
 
         <div className="mt-16 text-center text-[10px] text-gray-500 border-t border-gray-200 pt-4">
-          Corralón Nina — Establecimiento Comercial a cargo de Alvaro Montaño.<br/>
+          {datosEmpresa.nombre} — Establecimiento Comercial de materiales. <br/>
           Este documento constituye una cotización comercial estrictamente referencial e informativa. No válido como factura fiscal.
         </div>
       </div>

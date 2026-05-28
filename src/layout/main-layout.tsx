@@ -1,3 +1,4 @@
+import empresaDefault from '../data/datos';
 import React, { useState } from 'react';
 import { 
   Home, Box, Users, ShoppingCart, FileText, BarChart2, Settings, 
@@ -7,6 +8,13 @@ import {
 export default function MainLayout({ children, vistaActual, setVistaActual }) {
   // Estado para controlar si el modal de configuración está abierto
   const [mostrarConfig, setMostrarConfig] = useState(false);
+  const [empresa, setEmpresa] = useState(() => {
+    const guardado = localStorage.getItem('empresa');
+
+    return guardado
+      ? JSON.parse(guardado)
+      : empresaDefault;
+});
 
   // Le agregamos la propiedad 'label' a cada botón
   const menuItems = [
@@ -109,19 +117,40 @@ export default function MainLayout({ children, vistaActual, setVistaActual }) {
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-gray-400 mb-1">Razón Social / Nombre Comercial</label>
-                  <input type="text" defaultValue="Corralón Nina" className="w-full bg-dark-input border border-dark-border rounded-xl px-4 py-2.5 text-sm text-white focus:border-emerald-500 outline-none" />
+                  <input
+                    type="text"
+                    value={empresa.nombre}
+                    onChange={(e) =>
+                      setEmpresa({ ...empresa, nombre: e.target.value })
+                    }
+                    className="w-full bg-dark-input border border-dark-border rounded-xl px-4 py-2.5 text-sm text-white focus:border-emerald-500 outline-none"
+                  />                
                 </div>
                 
                 <div className="col-span-1">
                   <label className="block text-xs font-medium text-gray-400 mb-1">CUIT</label>
-                  <input type="text" placeholder="Ej: 30-12345678-9" className="w-full bg-dark-input border border-dark-border rounded-xl px-4 py-2.5 text-sm text-white focus:border-emerald-500 outline-none" />
+                 <input
+                    type="text"
+                    value={empresa.cuit}
+                    onChange={(e) =>
+                      setEmpresa({ ...empresa, cuit: e.target.value })
+                    }
+                    className="w-full bg-dark-input border border-dark-border rounded-xl px-4 py-2.5 text-sm text-white focus:border-emerald-500 outline-none"
+                  />
                 </div>
 
                 <div className="col-span-1">
                   <label className="block text-xs font-medium text-gray-400 mb-1">Teléfono</label>
                   <div className="relative">
                     <Phone size={14} className="absolute left-3 top-3 text-gray-500" />
-                    <input type="text" defaultValue="388-155..." className="w-full bg-dark-input border border-dark-border rounded-xl pl-9 pr-4 py-2.5 text-sm text-white focus:border-emerald-500 outline-none" />
+                    <input
+                      type="text"
+                      value={empresa.telefono}
+                      onChange={(e) =>
+                        setEmpresa({ ...empresa, telefono: e.target.value })
+                      }
+                      className="w-full bg-dark-input border border-dark-border rounded-xl pl-9 pr-4 py-2.5 text-sm text-white focus:border-emerald-500 outline-none"
+                    />
                   </div>
                 </div>
 
@@ -129,7 +158,14 @@ export default function MainLayout({ children, vistaActual, setVistaActual }) {
                   <label className="block text-xs font-medium text-gray-400 mb-1">Dirección</label>
                   <div className="relative">
                     <MapPin size={14} className="absolute left-3 top-3 text-gray-500" />
-                    <input type="text" placeholder="Calle, Número, Localidad" className="w-full bg-dark-input border border-dark-border rounded-xl pl-9 pr-4 py-2.5 text-sm text-white focus:border-emerald-500 outline-none" />
+                    <input
+                      type="text"
+                      value={empresa.direccion}
+                      onChange={(e) =>
+                        setEmpresa({ ...empresa, direccion: e.target.value })
+                      }
+                      className="w-full bg-dark-input border border-dark-border rounded-xl pl-9 pr-4 py-2.5 text-sm text-white focus:border-emerald-500 outline-none"
+                    />
                   </div>
                 </div>
               </div>
@@ -143,8 +179,11 @@ export default function MainLayout({ children, vistaActual, setVistaActual }) {
               >
                 Cancelar
               </button>
-              <button 
-                onClick={() => setMostrarConfig(false)}
+             <button 
+                onClick={() => {
+                  localStorage.setItem('empresa', JSON.stringify(empresa));
+                  setMostrarConfig(false);
+                }}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-sm font-semibold transition-colors shadow-lg shadow-emerald-950/20"
               >
                 Guardar Cambios

@@ -13,12 +13,12 @@ export default function App() {
   return (
     <MainLayout vistaActual={vistaActual} setVistaActual={setVistaActual}>
       
-      {vistaActual === 'inicio' && <Inicio />}
+      {/* CORRECCIÓN: Le pasamos la función setVistaActual para que reaccionen los Accesos Rápidos */}
+      {vistaActual === 'inicio' && <Inicio setVistaActual={setVistaActual} />}
       {vistaActual === 'productos' && <Productos />}
       {vistaActual === 'clientes' && <Clientes />}
       {vistaActual === 'carrito' && <NuevaVenta />}
       {vistaActual === 'ventas' && <Ventas />}
-      
       {/* 2. Inyectamos el componente de Reportes */}
       {vistaActual === 'reportes' && <Reportes />}
 
