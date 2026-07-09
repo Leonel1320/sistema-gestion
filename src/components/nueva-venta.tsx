@@ -1,24 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Search, ShoppingCart, Trash2, User, Plus, Minus, Box, CheckCircle2, Percent, AlertTriangle, Printer, FileCheck2
+  Search, ShoppingCart, Trash2, User, Plus, Minus, Box, CheckCircle2, Percent, AlertTriangle, Printer, FileCheck2, Barcode 
 } from 'lucide-react';
-
-// Importamos el archivo de configuración por defecto
 import empresaDefault from '../data/datos'; 
 
 export default function NuevaVenta() {
-  const [productosInventario, setProductosInventario] = useState([]);
-  const [clientesDirectorio, setClientesDirectorio] = useState([]);
+  const [productosInventario, setProductosInventario] = useState<any[]>([]);
+  const [clientesDirectorio, setClientesDirectorio] = useState<any[]>([]);
   const [clienteSeleccionado, setClienteSeleccionado] = useState('');
   const [busquedaCliente, setBusquedaCliente] = useState('');
   const [mostrarDesplegable, setMostrarDesplegable] = useState(false);
-  const [carrito, setCarrito] = useState([]);
+  const [carrito, setCarrito] = useState<any[]>([]);
   const [busqueda, setBusqueda] = useState('');
   const [descuentoGlobalPct, setDescuentoGlobalPct] = useState(0);
   const [ventaExitosa, setVentaExitosa] = useState(false);
   const [idCotizacionActual, setIdCotizacionActual] = useState('');
   
-  // Estado para los datos de la empresa (arranca con el default por seguridad)
+  // --- ESTADOS NUEVOS PARA EL LECTOR DE CÓDIGO DE BARRAS ---
+  const [productoEscaneado, setProductoEscaneado] = useState<any | null>(null);
+  const bufferRef = useRef(''); // Guarda los números que tipea la pistola en milisegundos
+  const ultimoPistolazoRef = useRef(0);
+
   const [datosEmpresa, setDatosEmpresa] = useState({
     nombre: empresaDefault.nombre,
     telefono: empresaDefault.telefono,
@@ -26,22 +28,22 @@ export default function NuevaVenta() {
     cuit: empresaDefault.cuit
   });
 
-  // Carga inicial desde PostgreSQL (Productos, Clientes y Empresa)
+  // Carga inicial desde PostgreSQL
   useEffect(() => {
     const cargarDatos = async () => {
       try {
         const [resProd, resCli, resEmp] = await Promise.all([
           fetch('http://localhost:5000/api/productos'),
           fetch('http://localhost:5000/api/clientes'),
-          fetch('http://localhost:5000/api/empresa') // Traemos los datos modificables de la otra pestaña
+          fetch('http://localhost:5000/api/empresa')
         ]);
         
         const dataProd = await resProd.json();
         const dataCli = await resCli.json();
         
-        setProductosInventario(dataProd.map(p => ({
+        setProductosInventario(dataProd.map((p: any) => ({
           id: p.id,
-          sku: p.sku,
+          sku: p.sku, // <--- Este campo de pgAdmin va a ser tu código de barras físico
           nombre: p.nombre,
           descripcion: p.descripcion,
           precioCompra: Number(p.precio_compra),
@@ -56,12 +58,10 @@ export default function NuevaVenta() {
           setBusquedaCliente(dataCli[0].nombre);
         }
 
-        // Si el endpoint de la empresa responde bien y tiene datos, los cargamos
         if (resEmp.ok) {
           const dataEmp = await resEmp.json();
           if (dataEmp) {
             setDatosEmpresa({
-              // Mapeamos los campos según las columnas de tu tabla 'configuracion_empresa'
               nombre: dataEmp.razon_social || empresaDefault.nombre,
               telefono: dataEmp.telefono || empresaDefault.telefono,
               direccion: dataEmp.direccion || empresaDefault.direccion,
@@ -76,11 +76,72 @@ export default function NuevaVenta() {
     cargarDatos();
   }, []);
 
+  // =========================================================================
+  // 💥 ESCUCHADOR GLOBAL DE LA PISTOLA DE CÓDIGO DE BARRAS
+  // =========================================================================
+  useEffect(() => {
+    const handleKeyPressGlobal = (e: KeyboardEvent) => {
+      // Ignorar si el usuario está tipeando manualmente adentro del buscador o campos de texto
+      const elementoActivo = document.activeElement?.tagName;
+      if (elementoActivo === 'INPUT' || elementoActivo === 'TEXTAREA' || elementoActivo === 'SELECT') {
+        // Excepción: Si el foco está en un input pero se presiona 'Enter', procesamos lo acumulado
+        if (e.key !== 'Enter') return;
+      }
+
+      const tiempoActual = Date.now();
+      
+      // Si pasó mucho tiempo entre tecla y tecla, asumimos que es un humano lento y limpiamos el buffer
+      if (tiempoActual - ultimoPistolazoRef.current > 50 && e.key !== 'Enter') {
+        bufferRef.current = '';
+      }
+      
+      ultimoPistolazoRef.current = tiempoActual;
+
+      if (e.key === 'Enter') {
+        // Al apretar Enter la pistola finaliza la lectura
+        const codigoFinal = bufferRef.current.trim().toUpperCase();
+        if (codigoFinal.length > 2) {
+          // Buscamos si el código de barras matchea con alguna columna SKU de la base de datos
+          const encontrado = productosInventario.find(p => p.sku && p.sku.toUpperCase() === codigoFinal);
+          if (encontrado) {
+            setProductoEscaneado(encontrado); // Abre la alerta flotante con el producto
+          } else {
+            // Si no coincide, podemos opcionalmente alertar o buscar coincidencias parciales
+            console.log(`Código escaneado "${codigoFinal}" no registrado en Postgres.`);
+          }
+        }
+        bufferRef.current = ''; // Limpiamos para el próximo pistolazo
+      } else {
+        // Vamos acumulando los caracteres que tipea la ráfaga láser de la pistola
+        if (e.key !== 'Shift' && e.key !== 'Control' && e.key !== 'Alt') {
+          bufferRef.current += e.key;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPressGlobal);
+    return () => window.removeEventListener('keydown', handleKeyPressGlobal);
+  }, [productosInventario]);
+
+  // Atajo de teclado: Si la alerta de escaneo está abierta y presionás "Enter", se agrega directo
+  useEffect(() => {
+    const presionarEnterConfirmar = (e: KeyboardEvent) => {
+      if (productoEscaneado && e.key === 'Enter') {
+        e.preventDefault();
+        agregarAlCarrito(productoEscaneado);
+        setProductoEscaneado(null);
+      }
+    };
+    window.addEventListener('keydown', presionarEnterConfirmar);
+    return () => window.removeEventListener('keydown', presionarEnterConfirmar);
+  }, [productoEscaneado]);
+
+
   const clienteActivo = clientesDirectorio.find(c => c.id === Number(clienteSeleccionado)) || clientesDirectorio[0] || { nombre: 'Consumidor Final', documento: '', telefono: '', direccion: '' };
   const clientesFiltrados = clientesDirectorio.filter(c => c.nombre.toLowerCase().includes(busquedaCliente.toLowerCase()));
 
-  const agregarAlCarrito = (producto) => {
-    setCarrito(prev => {
+  const agregarAlCarrito = (producto: any) => {
+    setCarrito((prev: any[]) => {
       const existe = prev.find(item => item.id === producto.id);
       if (existe) {
         return prev.map(item => item.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item);
@@ -89,8 +150,8 @@ export default function NuevaVenta() {
     });
   };
 
-  const actualizarCantidad = (id, delta) => {
-    setCarrito(prev => prev.map(item => {
+  const actualizarCantidad = (id: number, delta: number) => {
+    setCarrito((prev: any[]) => prev.map(item => {
       if (item.id === id) {
         const nuevaCant = item.cantidad + delta;
         return { ...item, cantidad: nuevaCant > 0 ? nuevaCant : 1 };
@@ -99,22 +160,22 @@ export default function NuevaVenta() {
     }));
   };
 
-  const actualizarCantidadInput = (id, valor) => {
+  const actualizarCantidadInput = (id: number, valor: string) => {
     const nuevaCant = parseInt(valor);
-    setCarrito(prev => prev.map(item => 
+    setCarrito((prev: any[]) => prev.map(item => 
       item.id === id ? { ...item, cantidad: isNaN(nuevaCant) || nuevaCant < 1 ? 1 : nuevaCant } : item
     ));
   };
 
-  const actualizarDescuentoItem = (id, porcentaje) => {
+  const actualizarDescuentoItem = (id: number, porcentaje: string) => {
     const pct = Number(porcentaje);
-    setCarrito(prev => prev.map(item => 
+    setCarrito((prev: any[]) => prev.map(item => 
       item.id === id ? { ...item, descuentoPct: pct >= 0 && pct <= 100 ? pct : 0 } : item
     ));
   };
 
-  const eliminarDelCarrito = (id) => {
-    setCarrito(prev => prev.filter(item => item.id !== id));
+  const eliminarDelCarrito = (id: number) => {
+    setCarrito((prev: any[]) => prev.filter(item => item.id !== id));
   };
 
   const subtotalBruto = carrito.reduce((acc, item) => acc + (item.precio * item.cantidad), 0);
@@ -175,22 +236,32 @@ export default function NuevaVenta() {
 
   return (
     <>
-      {/* 1. INTERFAZ VISIBLE DEL SISTEMA DE VENTAS */}
       <div className="flex flex-1 overflow-hidden bg-dark-bg relative print:hidden h-full">
         
         {/* SECCIÓN IZQUIERDA: CATÁLOGO */}
         <section className="flex-1 flex flex-col border-r border-dark-border z-0">
-          <div className="p-6 border-b border-dark-border bg-dark-panel">
-            <h2 className="text-2xl font-bold tracking-tight text-white mb-4">Punto de Venta</h2>
-            <div className="relative">
-              <Search className="absolute left-3 top-2.5 text-gray-500" size={18} />
-              <input 
-                type="text" 
-                value={busqueda}
-                onChange={(e) => setBusqueda(e.target.value)}
-                placeholder="Buscar materiales por nombre o código..." 
-                className="w-full bg-dark-input border border-dark-border rounded-xl pl-10 pr-4 py-2.5 text-sm text-gray-300 focus:outline-none focus:border-emerald-500 transition-colors"
-              />
+          <div className="p-6 border-b border-dark-border bg-dark-panel flex justify-between items-center gap-4">
+            <div className="flex-1">
+              <h2 className="text-2xl font-bold tracking-tight text-white mb-3">Punto de Venta</h2>
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 text-gray-500" size={18} />
+                <input 
+                  type="text" 
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder="Buscar materiales por nombre o código..." 
+                  className="w-full bg-dark-input border border-dark-border rounded-xl pl-10 pr-4 py-2.5 text-sm text-gray-300 focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            {/* Icono de estado del Lector Láser */}
+            <div className="bg-dark-input border border-dark-border/60 rounded-xl px-4 py-3 flex items-center gap-2.5 mt-8 text-gray-400 select-none">
+              <Barcode size={20} className="text-emerald-400 animate-pulse" />
+              <div className="text-left">
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider leading-none">Lector de Barra</p>
+                <p className="text-xs text-emerald-400 font-semibold mt-0.5 leading-none">Listo / Escuchando</p>
+              </div>
             </div>
           </div>
 
@@ -204,15 +275,15 @@ export default function NuevaVenta() {
                   className="bg-dark-panel border border-dark-border hover:border-emerald-500/50 hover:bg-dark-hover rounded-xl p-4 text-left transition-all flex flex-col gap-2 group"
                 >
                   <div className="flex justify-between items-start w-full">
-                    <div className="p-2 bg-dark-input border border-dark-border rounded-lg text-gray-400 group-hover:text-emerald-400 group-hover:bg-emerald-500/10 transition-colors">
-                      <Box size={18} />
+                    <div className="p-2 bg-dark-input border border-dark-border rounded-lg text-gray-400 group-hover:text-emerald-400 group-hover:bg-emerald-500/10 transition-colors font-mono text-[10px] font-bold">
+                      {prod.sku}
                     </div>
                     <span className="text-[10px] font-bold text-gray-400 bg-dark-bg px-2 py-1 rounded-md border border-dark-border">
                       Stock: {prod.stock}
                     </span>
                   </div>
                   <div>
-                    <p className="font-medium text-white text-sm mt-1 leading-tight">{prod.nombre}</p>
+                    <p className="font-medium text-white text-sm mt-1 leading-tight truncate w-40">{prod.nombre}</p>
                     <p className="font-bold text-emerald-400 mt-2">${prod.precio.toLocaleString('es-AR')}</p>
                   </div>
                 </button>
@@ -221,7 +292,7 @@ export default function NuevaVenta() {
           </div>
         </section>
 
-        {/* SECCIÓN DERECHA: CARRITO Y BUSCADOR INPUT */}
+        {/* SECCIÓN DERECHA: CARRITO */}
         <section className="w-[480px] bg-dark-panel flex flex-col z-0 shadow-2xl">
           <div className="p-6 border-b border-dark-border bg-dark-sidebar/50 relative">
             <div className="flex items-center justify-between mb-3">
@@ -353,6 +424,61 @@ export default function NuevaVenta() {
           </div>
         </section>
 
+        {/* --- MODAL FLOTANTE INTERACTIVO DE ESCANEO EXITOSO --- */}
+        {productoEscaneado && (
+          <div className="absolute inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-dark-panel border border-dark-border rounded-2xl w-full max-w-md p-6 shadow-2xl text-left space-y-4 animate-in fade-in zoom-in duration-100">
+              
+              <div className="flex justify-between items-center border-b border-dark-border pb-3">
+                <div className="flex items-center gap-2 text-emerald-400">
+                  <Barcode size={22} />
+                  <h3 className="text-lg font-bold text-white">¡Material Escaneado!</h3>
+                </div>
+                <button onClick={() => setProductoEscaneado(null)} className="text-gray-400 hover:text-white"><X size={20} /></button>
+              </div>
+
+              <div className="bg-dark-bg border border-dark-border/50 rounded-xl p-4 flex gap-4 items-center">
+                <div className="p-3 bg-dark-panel border border-dark-border text-emerald-400 rounded-xl"><Box size={24} /></div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-mono text-[10px] font-bold text-gray-500 tracking-wider">SKU / CÓDIGO</p>
+                  <p className="font-mono text-sm font-bold text-emerald-400 truncate leading-tight">{productoEscaneado.sku}</p>
+                  <p className="font-bold text-white text-base mt-1 truncate leading-tight">{productoEscaneado.nombre}</p>
+                </div>
+              </div>
+
+              <div className="flex justify-between items-baseline px-2 font-mono">
+                <span className="text-xs text-gray-400">Precio de Lista:</span>
+                <span className="text-2xl font-black text-white">${productoEscaneado.precio.toLocaleString('es-AR')}</span>
+              </div>
+
+              <div className="p-3 bg-emerald-500/5 border border-emerald-500/10 rounded-xl text-[11px] text-gray-400 text-center">
+                💡 Presioná <strong className="text-white bg-dark-input border px-1.5 py-0.5 rounded font-mono">Enter ↵</strong> para mandar directo al mostrador.
+              </div>
+
+              <div className="grid grid-cols-3 gap-3 pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setProductoEscaneado(null)} 
+                  className="col-span-1 py-2.5 text-sm font-semibold bg-dark-input border border-dark-border text-gray-300 rounded-xl hover:bg-dark-hover transition-colors"
+                >
+                  Descartar
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    agregarAlCarrito(productoEscaneado);
+                    setProductoEscaneado(null);
+                  }} 
+                  className="col-span-2 py-2.5 text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-md flex items-center justify-center gap-2 transition-all"
+                >
+                  <Plus size={16} /> Agregar al Carrito
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
         {/* MODAL DE ÉXITO */}
         {ventaExitosa && (
           <div className="absolute inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
@@ -383,7 +509,6 @@ export default function NuevaVenta() {
       <div className="hidden print:block bg-white text-black p-8 font-sans w-[210mm] min-h-[297mm] mx-auto">
         <div className="flex justify-between items-start border-b-2 border-gray-800 pb-6 mb-8">
           <div className="w-1/2">
-            {/* Renderizado dinámico del nombre de tu corralón basado en el estado */}
             <h1 className="text-4xl font-extrabold tracking-tighter text-gray-900 leading-none uppercase">
               {datosEmpresa.nombre.split(' ')[0]}
             </h1>
@@ -404,7 +529,6 @@ export default function NuevaVenta() {
               <p className="text-xs"><strong>Plazo Validez:</strong> 7 Días Corridos</p>
             </div>
             
-            {/* Recuadro de Datos del Cliente Bien Rotulado */}
             <div className="border border-gray-300 rounded overflow-hidden w-64">
               <h3 className="bg-gray-100 font-bold text-[10px] uppercase p-1.5 text-center border-b border-gray-300 tracking-wider text-gray-700">
                 DATOS DEL CLIENTE

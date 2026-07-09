@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, Search, Trash2, Edit2, Box, 
-  X, Save, AlertTriangle 
+  X, Save, AlertTriangle, Zap, FileSpreadsheet 
 } from 'lucide-react';
+// Importamos la librería para procesar de manera estricta la plantilla en el cliente
+import * as XLSX from 'xlsx';
 
-// Listado estandarizado y genérico para Corralón / Materiales
 const CATEGORIAS_CORRALON = [
   "Áridos y Cantera",
   "Liantes y Mezclas",
@@ -17,17 +18,19 @@ const CATEGORIAS_CORRALON = [
 ];
 
 export default function Productos() {
-  // 1. ESTADOS DE CONTROL
   const [productos, setProductos] = useState<any[]>([]);
   const [busqueda, setBusqueda] = useState('');
   const [modalAbierto, setModalAbierto] = useState(false);
   const [productoSeleccionado, setProductoSeleccionado] = useState<any | null>(null);
   const [modalEliminarAbierto, setModalEliminarAbierto] = useState<any | null>(null);
-  
-  // Estado local para alertas de validación
   const [errorPrecio, setErrorPrecio] = useState<string | null>(null);
 
-  // Formulario alineado con pgAdmin
+  const [modalMasivoAbierto, setModalMasivoAbierto] = useState(false);
+  const [base64Excel, setBase64Excel] = useState<string | null>(null);
+  const [nombreArchivo, setNombreArchivo] = useState<string>('');
+  const [procesandoMasivo, setProcesandoMasivo] = useState(false);
+  const [resultadoMasivo, setResultadoMasivo] = useState<any | null>(null);
+
   const [form, setForm] = useState({
     id: '',
     sku: '',
@@ -40,7 +43,6 @@ export default function Productos() {
     stock: ''
   });
 
-  // 2. CONEXIÓN AL BACKEND
   const cargarProductos = async () => {
     try {
       const res = await fetch('http://localhost:5000/api/productos');
@@ -76,20 +78,88 @@ export default function Productos() {
         nombre: prod.nombre || '',
         descripcion: prod.descripcion || '',
         marca: prod.marca || '',
-        categoria: prod.categoria || '', // Si ya tenía se precarga
+        categoria: prod.categoria || '', 
         precio_compra: prod.precio_compra !== undefined ? prod.precio_compra : '',
         precio_venta: prod.precio_venta !== undefined ? prod.precio_venta : '',
         stock: prod.stock !== undefined ? prod.stock : ''
       });
     } else {
       setProductoSeleccionado(null);
-      // Al ser nuevo, inicializa con la primera opción por defecto
       setForm({ id: '', sku: '', nombre: '', descripcion: '', marca: '', categoria: CATEGORIAS_CORRALON[0], precio_compra: '', precio_venta: '', stock: '' });
     }
     setModalAbierto(true);
   };
 
-  // 3. ENVIAR CAMBIOS A POSTGRES CON VALIDACIONES
+  // --- NUEVO MANEJADOR DE ARCHIVOS OPTIMIZADO PARA TEXTO PLANO ---
+  const handleCambioArchivo = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setNombreArchivo(file.name);
+
+    const reader = new FileReader();
+    reader.onload = (evento) => {
+      try {
+        const data = new Uint8Array(evento.target?.result as ArrayBuffer);
+        
+        // Forzamos la lectura exacta del archivo interpretando celdas como texto visible
+        const workbook = XLSX.read(data, { 
+          type: 'array',
+          raw: false // <-- CLAVE: Captura los formatos "$ 1.915,76" de forma literal para el back
+        });
+        
+        const nombreHoja = workbook.SheetNames[0];
+        const hoja = workbook.Sheets[nombreHoja];
+        
+        // Convertimos la matriz a un objeto JSON estructurado desde el navegador
+        const filasJson = XLSX.utils.sheet_to_json(hoja, { defval: "" });
+        
+        // Lo serializamos y convertimos a un String Base64 limpio libre de pérdidas por codificación regional
+        const jsonString = JSON.stringify(filasJson);
+        const base64Limpio = btoa(unescape(encodeURIComponent(jsonString)));
+        
+        setBase64Excel(base64Limpio);
+        setErrorPrecio(null);
+      } catch (err) {
+        console.error("Error al procesar la estructura del archivo:", err);
+        alert("No se pudo interpretar el archivo seleccionado.");
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleImportacionMasiva = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!base64Excel) return alert('Por favor, selecciona un archivo primero.');
+
+    setProcesandoMasivo(true);
+    setResultadoMasivo(null);
+
+    try {
+      const response = await fetch('http://localhost:5000/api/productos/importar-excel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64File: base64Excel }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setResultadoMasivo(data);
+        setBase64Excel(null);
+        setNombreArchivo('');
+        cargarProductos(); // Refresca instantáneamente tu grilla física en pantalla
+      } else {
+        alert(`Error del servidor: ${data.error}`);
+      }
+    } catch (error) {
+      console.error(error);
+      alert('Error de red al conectar con el backend.');
+    } finally {
+      setProcesandoMasivo(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorPrecio(null);
@@ -98,7 +168,6 @@ export default function Productos() {
     const ventaNum = Number(form.precio_venta) || 0;
     const stockInt = parseInt(form.stock) || 0;
 
-    // === VALIDACIÓN CRÍTICA DE MARGEN DE PÉRDIDAS ===
     if (compraNum >= ventaNum) {
       setErrorPrecio("⚠️ El precio de venta debe ser mayor al costo de compra para no generar pérdidas.");
       return; 
@@ -115,7 +184,6 @@ export default function Productos() {
       : 'http://localhost:5000/api/productos';
     const method = esEdicion ? 'PUT' : 'POST';
 
-    // Generador automático de SKU
     let skuFinal = form.sku;
     if (!esEdicion) {
       const raiz = form.nombre.trim().substring(0, 3).toUpperCase().replace(/[^A-Z]/g, 'MAT');
@@ -128,7 +196,7 @@ export default function Productos() {
       nombre: form.nombre,
       descripcion: form.descripcion,
       marca: form.marca,
-      categoria: form.categoria, // Viaja el texto limpio seleccionado del dropdown
+      categoria: form.categoria, 
       precio_compra: compraNum,
       precio_venta: ventaNum,
       stock: stockInt
@@ -173,9 +241,19 @@ export default function Productos() {
           <h1 className="text-3xl font-extrabold text-white tracking-tight">Materiales y Productos</h1>
           <p className="text-sm text-gray-400 mt-1">Esquema físico sincronizado con las columnas reales de pgAdmin.</p>
         </div>
-        <button onClick={() => abrirModal()} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-lg shadow-emerald-950/20">
-          <Plus size={18} /> Nuevo Material
-        </button>
+        
+        <div className="flex gap-3">
+          <button 
+            onClick={() => { setResultadoMasivo(null); setModalMasivoAbierto(true); }} 
+            className="flex items-center gap-2 bg-dark-panel border border-cyan-500/40 hover:bg-dark-hover text-cyan-400 px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg"
+          >
+            <FileSpreadsheet size={18} /> Carga Masiva
+          </button>
+
+          <button onClick={() => abrirModal()} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-colors shadow-lg shadow-emerald-950/20">
+            <Plus size={18} /> Nuevo Material
+          </button>
+        </div>
       </div>
 
       {/* FILTRO BUSCADOR */}
@@ -244,11 +322,70 @@ export default function Productos() {
         </table>
       </div>
 
-      {/* --- MODAL CON DESPLEGABLE DE CATEGORÍAS --- */}
+      {/* MODAL IMPORTACIÓN MASIVA */}
+      {modalMasivoAbierto && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-[#1a1a1e] border border-dark-border rounded-2xl p-6 max-w-md w-full relative space-y-4">
+            <button onClick={() => setModalMasivoAbierto(false)} className="absolute top-4 right-4 text-gray-400 hover:text-white">
+              <X size={20} />
+            </button>
+
+            <h3 className="text-xl font-bold text-white flex items-center gap-2">
+              <FileSpreadsheet className="text-cyan-500" /> Importar desde Excel / CSV
+            </h3>
+            <p className="text-xs text-gray-400">
+              Cargá tu archivo estructurado. El sistema sincronizará de forma segura: SKU, Nombre, Marca, Costo, Stock y Detalles.
+            </p>
+
+            <form onSubmit={handleImportacionMasiva} className="space-y-4">
+              <div className="flex flex-col items-center justify-center border-2 border-dashed border-dark-border rounded-xl p-6 bg-dark-input hover:border-cyan-500/50 transition-colors relative">
+                <input 
+                  type="file" 
+                  accept=".xlsx, .xls, .csv"
+                  onChange={handleCambioArchivo}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  disabled={procesandoMasivo}
+                />
+                <Zap size={32} className={base64Excel ? "text-emerald-500 mb-2" : "text-gray-600 mb-2"} />
+                <span className="text-sm text-gray-300 font-medium text-center">
+                  {nombreArchivo ? `✅ ${nombreArchivo}` : "Seleccionar plantilla .xlsx o .csv"}
+                </span>
+              </div>
+
+              {resultadoMasivo && (
+                <div className="p-3 rounded-xl bg-cyan-950/40 border border-cyan-800 text-cyan-200 text-xs space-y-1">
+                  <p className="font-bold text-white">✨ ¡Sincronización finalizada correctamente!</p>
+                  <p>• Nuevos materiales cargados: {resultadoMasivo.estadisticas?.insertados}</p>
+                  <p>• Precios e inventario actualizados: {resultadoMasivo.estadisticas?.actualizados}</p>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 border-t border-dark-border pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setModalMasivoAbierto(false)} 
+                  className="px-4 py-2 text-sm bg-dark-input border border-dark-border rounded-xl text-gray-300 hover:bg-dark-hover"
+                  disabled={procesandoMasivo}
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="submit" 
+                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-sm font-bold transition-colors"
+                  disabled={procesandoMasivo || !base64Excel}
+                >
+                  {procesandoMasivo ? 'Procesando...' : 'Subir y Sincronizar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL TRADICIONAL DE CREAR / EDITAR INDIVIDUAL */}
       {modalAbierto && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <form onSubmit={handleSubmit} className="bg-dark-panel border border-dark-border rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in duration-150">
-            
+          <form onSubmit={handleSubmit} className="bg-dark-panel border border-dark-border rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4">
             <div className="flex justify-between items-center border-b border-dark-border pb-3">
               <h3 className="text-lg font-bold text-white">
                 {productoSeleccionado ? '✏️ Modificar Registro' : '📦 Crear Nuevo Material'}
@@ -263,7 +400,6 @@ export default function Productos() {
               </div>
             )}
 
-            {/* Fila 1: SKU Bloqueado y Nombre */}
             <div className="grid grid-cols-3 gap-4">
               <div>
                 <label className="text-xs font-bold text-gray-400 block mb-1">SKU</label>
@@ -271,20 +407,14 @@ export default function Productos() {
               </div>
               <div className="col-span-2">
                 <label className="text-xs font-bold text-gray-400 block mb-1">Nombre del Material *</label>
-                <input type="text" value={form.nombre} onChange={(e) => setForm({...form, nombre: e.target.value})} className="w-full bg-dark-input border border-dark-border rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500" placeholder="Ej: Cemento Loma Negra 50kg" required />
+                <input type="text" value={form.nombre} onChange={(e) => setForm({...form, nombre: e.target.value})} className="w-full bg-dark-input border border-dark-border rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500" required />
               </div>
             </div>
 
-            {/* Fila 2: MENÚ DESPLEGABLE (SELECT) + Marca */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-xs font-bold text-gray-400 block mb-1">Categoría / Rubro *</label>
-                <select 
-                  value={form.categoria} 
-                  onChange={(e) => setForm({...form, categoria: e.target.value})} 
-                  className="w-full bg-dark-input border border-dark-border rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 font-semibold"
-                  required
-                >
+                <select value={form.categoria} onChange={(e) => setForm({...form, categoria: e.target.value})} className="w-full bg-dark-input border border-dark-border rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 font-semibold" required>
                   {CATEGORIAS_CORRALON.map((cat) => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
@@ -292,20 +422,18 @@ export default function Productos() {
               </div>
               <div>
                 <label className="text-xs font-bold text-gray-400 block mb-1">Marca del Fabricante</label>
-                <input type="text" value={form.marca} onChange={(e) => setForm({...form, marca: e.target.value})} className="w-full bg-dark-input border border-dark-border rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500" placeholder="Ej: Holcim, Acindar, Makita" />
+                <input type="text" value={form.marca} onChange={(e) => setForm({...form, marca: e.target.value})} className="w-full bg-dark-input border border-dark-border rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500" />
               </div>
             </div>
 
-            {/* Fila 3: Descripción */}
             <div>
               <label className="text-xs font-bold text-gray-400 block mb-1">Descripción Técnica</label>
-              <textarea value={form.descripcion} onChange={(e) => setForm({...form, descripcion: e.target.value})} className="w-full bg-dark-input border border-dark-border rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 h-16 resize-none" placeholder="Especificaciones estructurales..." />
+              <textarea value={form.descripcion} onChange={(e) => setForm({...form, descripcion: e.target.value})} className="w-full bg-dark-input border border-dark-border rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 h-16 resize-none" />
             </div>
 
-            {/* Fila 4: Precios y Stock */}
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="text-xs font-bold text-gray-400 block mb-1">Costo Compra ($) *</label>
+                <label className="text-xs font-bold text-gray-400 block mb-1">Costo Comp ($) *</label>
                 <input type="number" step="any" value={form.precio_compra} onChange={(e) => setForm({...form, precio_compra: e.target.value})} className="w-full bg-dark-input border border-dark-border rounded-xl p-2.5 text-sm text-white focus:outline-none focus:border-emerald-500" required />
               </div>
               <div>
@@ -318,12 +446,10 @@ export default function Productos() {
               </div>
             </div>
 
-            {/* Botonera */}
             <div className="flex justify-end gap-3 border-t border-dark-border pt-4">
               <button type="button" onClick={() => setModalAbierto(false)} className="px-4 py-2 text-sm bg-dark-input border border-dark-border rounded-xl text-gray-300 hover:bg-dark-hover">Cancelar</button>
               <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-sm font-bold flex items-center gap-1.5 transition-colors"><Save size={16}/> Guardar Cambios</button>
             </div>
-
           </form>
         </div>
       )}
